@@ -1,6 +1,4 @@
-<p align="center">
-  <span style="font-family: Arial, sans-serif; font-size: 3rem; font-weight: bold; color: #1e90ff;">PortScan</span>
-</p>
+# PortScan
 
 <p align="center">
   <span style="background: #fff3cd; color: #856404; padding: 0.5rem 1rem; border-radius: 4px; font-weight: bold;">
