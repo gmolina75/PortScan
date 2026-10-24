@@ -1,4 +1,14 @@
-# PortScan
+<p align="center">
+  <span style="font-family: Arial, sans-serif; font-size: 3rem; font-weight: bold; color: #1e90ff;">PortScan</span>
+</p>
+
+<p align="center">
+  <span style="background: #fff3cd; color: #856404; padding: 0.5rem 1rem; border-radius: 4px; font-weight: bold;">
+    ⚠️ Solo para uso autorizado — No escanear redes sin permiso explícito por escrito
+  </span>
+</p>
+
+---
 
 Escáner de puertos TCP/UDP en español para auditorías de red autorizadas.
 
