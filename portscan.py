@@ -167,8 +167,8 @@ def banner() -> None:
   ▐█▄▪▐█    ▐███▌    ▐█ ▪▐▌    ██▐█▌
    ▀▀▀▀     ·▀▀▀      ▀  ▀     ▀▀ █▪
 """
-    print(msg(Colors.RED, art))
-    print(msg(Colors.YELLOW, f"========= Escáner de Puertos v{VERSION} por Giancarlo ========="))
+    print(msg(Colors.BLUE, art))
+    print(msg(Colors.CYAN, f"═══ Aurora PortScan v{VERSION} — Escáner de Puertos Profesional ═══"))
     print()
 
 
