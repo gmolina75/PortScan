@@ -11,10 +11,13 @@ Uso:
 
 import io
 import sys
+import os
+import tempfile
 from datetime import datetime
 from typing import List
+from pathlib import Path
 
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, Response
 
 # Forzar codificación UTF-8 para evitar problemas en Windows
 try:
@@ -118,6 +121,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <option value="text" {% if request.form.get('output') == 'text' %}selected{% endif %}>Resumen Texto</option>
             <option value="json" {% if request.form.get('output') == 'json' %}selected{% endif %}>JSON Completo</option>
             <option value="csv" {% if request.form.get('output') == 'csv' %}selected{% endif %}>CSV</option>
+            <option value="html" {% if request.form.get('output') == 'html' %}selected{% endif %}>Informe HTML</option>
           </select>
         </div>
       </div>
@@ -193,6 +197,48 @@ def index():
                 else:
                     hosts.append(h)
 
+            # Si es HTML y un solo host, manejar de forma especial (devolver como descarga)
+            if output_fmt == "html" and len(hosts) == 1:
+                h = hosts[0]
+                try:
+                    ip, ip_version = resolve_host(h)
+                except ValueError:
+                    return f"<span class='port-closed'>Error: No se pudo resolver: {h}</span>", 400
+
+                resultados, duracion = scan(
+                    ip, puertos, timeout=timeout, workers=workers,
+                    protocolo=proto, ip_version=ip_version, quiet=True
+                )
+
+                reporte = Reporte(
+                    host=h, ip=ip, protocolo=proto,
+                    inicio=datetime.now().isoformat(timespec="seconds"),
+                    duracion=duracion, puertos_escaneados=len(puertos),
+                    puertos_abiertos=sum(1 for r in resultados if r.abierto),
+                    resultados=resultados,
+                )
+
+                from flask import Response
+                from portscan import _exportar_html
+                import tempfile
+                import os
+
+                with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode='w', encoding='utf-8') as tmp:
+                    tmp_path = tmp.name
+                try:
+                    _exportar_html(reporte, Path(tmp_path))
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
+                        html_content = f.read()
+                    return Response(
+                        html_content,
+                        mimetype='text/html',
+                        headers={'Content-Disposition': f'attachment; filename="portscan_{h.replace(".", "_")}_{proto}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.html"'}
+                    )
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+
+            # Para otros formatos o múltiples hosts
             output_buffer = []
             if red_info:
                 output_buffer.append(red_info)
@@ -235,6 +281,22 @@ def index():
                                     r.puerto, "abierto" if r.abierto else "cerrado",
                                     r.servicio])
                     output_buffer.append(buf.getvalue())
+                elif output_fmt == "html":
+                    # Para múltiples hosts, generar HTML y añadir al buffer
+                    from portscan import _exportar_html
+                    import tempfile
+                    import os
+
+                    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode='w', encoding='utf-8') as tmp:
+                        tmp_path = tmp.name
+                    try:
+                        _exportar_html(reporte, Path(tmp_path))
+                        with open(tmp_path, 'r', encoding='utf-8') as f:
+                            html_content = f.read()
+                        output_buffer.append(f"<!-- INFORME HTML PARA {h} -->\n{html_content}")
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
                 else:
                     # Formato texto con resaltado HTML
                     abiertos = [r for r in resultados if r.abierto]

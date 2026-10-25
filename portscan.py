@@ -395,9 +395,12 @@ def parse_ports(ports_str: str) -> List[int]:
 # ---------------------------------------------------------------------------
 
 def exportar(reporte: Reporte, path: Path) -> None:
-    """Guarda el reporte en CSV o JSON según la extensión."""
-    if path.suffix.lower() == ".json":
+    """Guarda el reporte en CSV, JSON o HTML según la extensión."""
+    sufijo = path.suffix.lower()
+    if sufijo == ".json":
         _exportar_json(reporte, path)
+    elif sufijo == ".html":
+        _exportar_html(reporte, path)
     else:
         _exportar_csv(reporte, path)
 
@@ -419,6 +422,355 @@ def _exportar_json(reporte: Reporte, path: Path) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     print(msg(Colors.GREEN, f"Resultados guardados en: {path}"))
+
+
+def _exportar_html(reporte: Reporte, path: Path) -> None:
+    """Genera un informe HTML bonito y compartible."""
+    from html import escape
+    
+    abiertos = [r for r in reporte.resultados if r.abierto]
+    cerrados = [r for r in reporte.resultados if not r.abierto]
+    
+    # Agrupar por host si hay múltiples
+    hosts_data = {}
+    for r in reporte.resultados:
+        key = f"{reporte.host} ({reporte.ip})"
+        if key not in hosts_data:
+            hosts_data[key] = {"abiertos": [], "cerrados": []}
+        if r.abierto:
+            hosts_data[key]["abiertos"].append(r)
+        else:
+            hosts_data[key]["cerrados"].append(r)
+    
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Informe PortScan - {escape(reporte.host)}</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0f0f23 100%);
+    color: #e8e8e8;
+    margin: 0;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }}
+  .container {{
+    max-width: 900px;
+    margin: 0 auto;
+    background: rgba(20, 20, 40, 0.95);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 100, 100, 0.1);
+    overflow: hidden;
+    border: 1px solid rgba(255, 100, 100, 0.15);
+  }}
+  .header {{
+    background: linear-gradient(90deg, #ff4444 0%, #ff6b6b 50%, #ff4444 100%);
+    padding: 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }}
+  .header::before {{
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cpattern id='grid' width='10' height='10' patternUnits='userSpaceOnUse'%3E%3Cpath d='M 10 0 L 0 0 0 10' fill='none' stroke='rgba(255,255,255,0.05)' stroke-width='0.5'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23grid)'/%3E%3C/svg%3E");
+    opacity: 0.5;
+  }}
+  .header h1 {{
+    margin: 0;
+    font-size: 2.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    position: relative;
+    z-index: 1;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+  }}
+  .header .subtitle {{
+    margin: 10px 0 0;
+    font-size: 1.1rem;
+    opacity: 0.9;
+    font-weight: 300;
+    position: relative;
+    z-index: 1;
+  }}
+  .header .version {{
+    display: inline-block;
+    margin-top: 12px;
+    padding: 6px 16px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    position: relative;
+    z-index: 1;
+  }}
+  .content {{ padding: 40px; }}
+  .section {{
+    margin-bottom: 40px;
+    padding-bottom: 30px;
+    border-bottom: 1px solid rgba(255, 100, 100, 0.1);
+  }}
+  .section:last-child {{ border-bottom: none; margin-bottom: 0; }}
+  .section-title {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #ff6b6b;
+    margin-bottom: 20px;
+  }}
+  .section-title::before {{
+    content: '';
+    width: 4px;
+    height: 24px;
+    background: linear-gradient(180deg, #ff4444, #ff6b6b);
+    border-radius: 2px;
+  }}
+  .info-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 8px;
+  }}
+  .info-card {{
+    background: rgba(255, 68, 68, 0.08);
+    border: 1px solid rgba(255, 68, 68, 0.15);
+    border-radius: 10px;
+    padding: 18px 20px;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }}
+  .info-card:hover {{
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(255, 68, 68, 0.15);
+  }}
+  .info-label {{
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #aaa;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }}
+  .info-value {{
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }}
+  .info-value.open {{ color: #4ade80; }}
+  .info-value.closed {{ color: #f87171; }}
+  .info-value.duration {{ color: #fbbf24; }}
+  .port-table {{ width: 100%; border-collapse: collapse; }}
+  .port-table th {{
+    text-align: left;
+    padding: 14px 16px;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #888;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(255, 68, 68, 0.2);
+    background: rgba(255, 68, 68, 0.05);
+  }}
+  .port-table td {{
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 68, 68, 0.08);
+    font-size: 0.9rem;
+  }}
+  .port-table tr:last-child td {{ border-bottom: none; }}
+  .port-table tr:hover td {{ background: rgba(255, 68, 68, 0.05); }}
+  .port-table .port {{ font-family: 'SF Mono', 'Fira Code', monospace; font-weight: 600; }}
+  .port-table .service {{ color: #bbb; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; }}
+  .status {{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }}
+  .status.open {{ background: rgba(74, 222, 128, 0.15); color: #4ade80; }}
+  .status.closed {{ background: rgba(248, 113, 113, 0.15); color: #f87171; }}
+  .status::before {{
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }}
+  .status.open::before {{ background: #4ade80; box-shadow: 0 0 8px #4ade80; }}
+  .status.closed::before {{ background: #f87171; box-shadow: 0 0 8px #f87171; }}
+  .empty-state {{
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    font-style: italic;
+  }}
+  .empty-state svg {{ width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.5; }}
+  .tabs {{
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    background: rgba(255, 68, 68, 0.05);
+    padding: 4px;
+    border-radius: 8px;
+  }}
+  .tab {{
+    flex: 1;
+    padding: 12px 20px;
+    border: none;
+    background: transparent;
+    color: #888;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+  }}
+  .tab.active {{
+    background: #ff4444;
+    color: white;
+    box-shadow: 0 2px 8px rgba(255, 68, 68, 0.3);
+  }}
+  .tab:not(.active):hover {{ color: #ccc; background: rgba(255, 255, 255, 0.03); }}
+  .tab-panel {{ display: none; }}
+  .tab-panel.active {{ display: block; animation: fadeIn 0.2s ease; }}
+  @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+  .footer {{
+    padding: 24px 40px;
+    background: rgba(0, 0, 0, 0.2);
+    text-align: center;
+    font-size: 0.8rem;
+    color: #666;
+    border-top: 1px solid rgba(255, 68, 68, 0.1);
+  }}
+  .footer a {{ color: #ff6b6b; text-decoration: none; }}
+  .footer a:hover {{ text-decoration: underline; }}
+  @media print {{
+    body {{ background: white; color: #333; }}
+    .container {{ box-shadow: none; border: 1px solid #ddd; }}
+    .header {{ background: #ff4444 !important; -webkit-print-color-adjust: exact; }}
+    .info-card {{ border: 1px solid #ddd; background: #fafafa; }}
+    .port-table th {{ background: #f0f0f0 !important; -webkit-print-color-adjust: exact; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔍 Informe de Escaneo PortScan</h1>
+      <div class="subtitle">Análisis de puertos {escape(reporte.protocolo.upper())} — {escape(reporte.host)}</div>
+      <div class="version">PortScan v{VERSION} · Generado el {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div>
+    </div>
+    
+    <div class="content">
+      <div class="section">
+        <h2 class="section-title">Resumen del Escaneo</h2>
+        <div class="info-grid">
+          <div class="info-card">
+            <div class="info-label">Host Objetivo</div>
+            <div class="info-value">{escape(reporte.host)}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Dirección IP</div>
+            <div class="info-value">{escape(reporte.ip)}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Protocolo</div>
+            <div class="info-value">{escape(reporte.protocolo.upper())}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Puertos Escaneados</div>
+            <div class="info-value">{reporte.puertos_escaneados}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Puertos Abiertos</div>
+            <div class="info-value open">{len(abiertos)}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Puertos Cerrados</div>
+            <div class="info-value closed">{len(cerrados)}</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Duración</div>
+            <div class="info-value duration">{reporte.duracion:.2f}s</div>
+          </div>
+          <div class="info-card">
+            <div class="info-label">Inicio</div>
+            <div class="info-value">{escape(reporte.inicio)}</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="section">
+        <h2 class="section-title">Puertos Abiertos ({len(abiertos)})</h2>
+        {'<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>No se encontraron puertos abiertos</p></div>' if not abiertos else f'''
+        <div class="tabs">
+          <button class="tab active" onclick="showTab(this, 'abiertos')">Abiertos ({len(abiertos)})</button>
+          <button class="tab" onclick="showTab(this, 'cerrados')">Cerrados ({len(cerrados)})</button>
+        </div>
+        <div class="tab-panel active" id="panel-abiertos">
+          <table class="port-table">
+            <thead>
+              <tr>
+                <th>Puerto</th>
+                <th>Servicio</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(f'<tr><td class="port">{r.puerto}</td><td class="service">{escape(r.servicio)}</td><td><span class="status open">Abierto</span></td></tr>' for r in abiertos)}
+            </tbody>
+          </table>
+        </div>
+        <div class="tab-panel" id="panel-cerrados">
+          <table class="port-table">
+            <thead>
+              <tr>
+                <th>Puerto</th>
+                <th>Servicio</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {''.join(f'<tr><td class="port">{r.puerto}</td><td class="service">{escape(r.servicio)}</td><td><span class="status closed">Cerrado</span></td></tr>' for r in cerrados[:500])}
+              {'<tr><td colspan="3" style="text-align:center; color:#888; padding:20px;">... y ' + str(len(cerrados) - 500) + ' puertos cerrados más</td></tr>' if len(cerrados) > 500 else ''}
+            </tbody>
+          </table>
+        </div>
+        '''}
+      </div>
+    </div>
+    
+    <div class="footer">
+      Generado por <strong>PortScan v{VERSION}</strong> — Escáner de puertos TCP/UDP profesional<br>
+      <a href="https://github.com/gmolina75/PortScan" target="_blank">github.com/gmolina75/PortScan</a> · 
+      Uso autorizado únicamente en redes propias o con permiso explícito
+    </div>
+  </div>
+  
+  <script>
+    function showTab(btn, panelId) {{
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel-' + panelId).classList.add('active');
+    }}
+  </script>
+</body>
+</html>
+"""
+    with path.open("w", encoding="utf-8") as f:
+        f.write(html)
+    print(msg(Colors.GREEN, f"Informe HTML guardado en: {path}"))
 
 
 def nombre_archivo_auto(host: str, protocolo: str) -> Path:
@@ -547,12 +899,14 @@ def _escaneo_interactivo() -> None:
 
         guardar = _input(msg(Colors.RED, "¿Guardar resultados? (s/n)"), "s")
         if guardar.lower() == "s":
-            fmt = _input(msg(Colors.RED, "Formato (json/csv)"), "json").lower()
-            if fmt not in ("json", "csv"):
-                fmt = "json"
+            fmt = _input(msg(Colors.RED, "Formato (json/csv/html)"), "html").lower()
+            if fmt not in ("json", "csv", "html"):
+                fmt = "html"
             nombre = nombre_archivo_auto(host, proto)
             if fmt == "csv":
                 nombre = Path(str(nombre).replace(".json", ".csv"))
+            elif fmt == "html":
+                nombre = Path(str(nombre).replace(".json", ".html"))
             exportar(reporte, nombre)
     except ValueError as ve:
         print(msg(Colors.RED, str(ve)))
@@ -617,7 +971,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="Hilos paralelos [100]")
     p.add_argument("--proto", choices=["tcp", "udp"], default="tcp",
                    help="Protocolo a escanear [tcp]")
-    p.add_argument("-o", "--output", help="Archivo de salida (.csv o .json)")
+    p.add_argument("-o", "--output", help="Archivo de salida (.csv, .json o .html)")
     p.add_argument("-q", "--quiet", action="store_true",
                    help="Salida reducida: solo resumen de abiertos")
     p.add_argument("--no-progress", action="store_true",
