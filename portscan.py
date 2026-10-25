@@ -156,15 +156,15 @@ def servicio_de(puerto: int) -> str:
 def banner() -> None:
     art = r"""
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   █████╗ ██╗   ██╗██████╗  █████╗ ██████╗ ██████╗ 
+   █████╗ ██╗   ██╗██████╗  █████╗ ██████╗  █████╗ 
   ██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔══██╗██╔══██║
-  ███████║██║   ██║██████╔╝██║  ██║██████╔╝██████╔╝
-  ██╔══██║██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══██╗
+  ███████║██║   ██║██████╔╝██║  ██║██████╔╝███████║
+  ██╔══██║██║   ██║██╔══██╗██║  ██║██╔══██╗██╔══██║
   ██║  ██║╚██████╔╝██║  ██║ █████╔╝██║  ██║██║  ██║
   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝ ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 """
-    print(msg(Colors.RED, art))
+    print(msg(Colors.BLUE, art))
     print(msg(Colors.CYAN, f"═══ Aurora PortScan v{VERSION} — Escáner de Puertos Profesional ═══"))
     print()
 
@@ -192,6 +192,70 @@ def resolve_host(host: str) -> Tuple[str, int]:
     except socket.gaierror:
         pass
     raise ValueError(f"Host inválido o sin resolución: {host}")
+
+
+# ---------------------------------------------------------------------------
+# Detección de IPs locales y públicas
+# ---------------------------------------------------------------------------
+
+def ip_local() -> Optional[str]:
+    """
+    Obtiene la IP local de la máquina mediante un socket UDP.
+    No envía datos reales, solo determina la interfaz usada para llegar a internet.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        return ip
+    except OSError:
+        return None
+
+
+def ip_publica() -> Optional[str]:
+    """
+    Obtiene la IP pública consultando un servicio externo.
+    Requiere conexión a internet.
+    """
+    import urllib.request
+    urls = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://ident.me",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "PortScan/2.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                ip = resp.read().decode("utf-8").strip()
+                if ip:
+                    return ip
+        except Exception:
+            continue
+    return None
+
+
+def ips_en_red(base_ip: str) -> List[str]:
+    """
+    Dado '192.168.100.0', retorna lista de IPs del .1 al .254.
+    Solo funciona para IPv4.
+    """
+    partes = base_ip.split(".")
+    if len(partes) != 4:
+        raise ValueError("IP debe ser IPv4 (ej: 192.168.100.0)")
+    try:
+        a, b, c, d = (int(p) for p in partes)
+    except ValueError:
+        raise ValueError("Componentes de IP deben ser numéricos")
+    if not (0 <= a <= 255 and 0 <= b <= 255 and 0 <= c <= 255 and 0 <= d <= 255):
+        raise ValueError("Componentes de IP fuera de rango (0-255)")
+    if d != 0:
+        raise ValueError("El último octeto debe ser 0 para escanear toda la red (ej: 192.168.100.0)")
+    base = f"{a}.{b}.{c}."
+    return [base + str(i) for i in range(1, 255)]
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +331,19 @@ def scan(ip: str, puertos: List[int], timeout: float = 1.0,
             completados += 1
             if verbose and progress and not quiet:
                 bar = progress_bar(completados, total)
-                print(f"\r{msg(Colors.CYAN, f'Escaneando [{bar} ]')} "
-                      f"{completados}/{total}", end="", flush=True)
+                try:
+                    print(f"\r{msg(Colors.CYAN, f'Escaneando [{bar} ]')} "
+                          f"{completados}/{total}", end="", flush=True)
+                except UnicodeEncodeError:
+                    print(f"\rEscaneando [{bar} ] {completados}/{total}", end="", flush=True)
             # Mostrar abiertos al vuelo (solo en modo detallado o quiet)
             if r.abierto and (not verbose or quiet):
-                print(f"\n{msg(Colors.WHITE, '▬▶')} Puerto {r.puerto} "
-                      f"{msg(Colors.GREEN, 'ABIERTO')} "
-                      f"({r.servicio})")
+                try:
+                    print(f"\n{msg(Colors.WHITE, '▼▶')} Puerto {r.puerto} "
+                          f"{msg(Colors.GREEN, 'ABIERTO')} "
+                          f"({r.servicio})")
+                except UnicodeEncodeError:
+                    print(f"\nPuerto {r.puerto} ABIERTO ({r.servicio})")
 
     if verbose and progress and not quiet:
         print()  # salto de línea tras la barra
