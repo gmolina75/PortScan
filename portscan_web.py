@@ -62,6 +62,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .port-closed { color: #ff6b6b; }
   .info { color: #4dabf7; }
   .warn { color: #ffd435; }
+  .quick-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .quick-actions button { background: rgba(255, 68, 68, 0.15); color: #ff6b6b; padding: 6px 12px; border: 1px solid rgba(255, 68, 68, 0.3); border-radius: 4px; cursor: pointer; font-size: 0.8em; transition: all 0.2s; }
+  .quick-actions button:hover { background: rgba(255, 68, 68, 0.25); border-color: #ff4444; }
 </style>
 </head>
 <body>
@@ -76,9 +79,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <span class="label">IP Pública:</span> <span id="ip-publica">{{ ip_publica or 'Detectando...' }}</span>
     </div>
 
-    <form method="POST" action="/">
-      <label>Host / IP (separados por coma para múltiples):</label>
-      <input name="host" placeholder="ej. 192.168.1.1, google.com" value="{{ request.form.get('host', '') }}">
+    <form method="POST" action="/" id="scanForm">
+      <label>Host / IP / Red:</label>
+      <input name="host" id="hostInput" placeholder="ej. 192.168.1.1, 192.168.100.0/24, google.com" value="{{ request.form.get('host', '') }}">
+      <div class="quick-actions">
+        <button type="button" onclick="setNetwork('192.168.100.0/24')">🌐 Red Local /24 (254 IPs)</button>
+        <button type="button" onclick="setNetwork('192.168.1.0/24')">🏠 Red 192.168.1.0/24</button>
+        <button type="button" onclick="setNetwork('10.0.0.0/24')">🏢 Red 10.0.0.0/24</button>
+        <button type="button" onclick="setNetwork('172.16.0.0/24')">🔒 Red 172.16.0.0/24</button>
+      </div>
 
       <div class="row">
         <div class="col">
@@ -133,6 +142,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div id="result">{{ result | safe }}</div>
     {% endif %}
   </div>
+  
+  <script>
+    function setNetwork(cidr) {
+      document.getElementById('hostInput').value = cidr;
+      // Auto-ajustar configuración para escaneo de red
+      if (!document.querySelector('input[name="ports"]').value) {
+        document.querySelector('input[name="ports"]').value = '22,80,443,8080';
+      }
+      if (!document.querySelector('input[name="timeout"]').value || parseFloat(document.querySelector('input[name="timeout"]').value) > 0.5) {
+        document.querySelector('input[name="timeout"]').value = '0.3';
+      }
+      if (!document.querySelector('input[name="workers"]').value || parseInt(document.querySelector('input[name="workers"]').value) < 50) {
+        document.querySelector('input[name="workers"]').value = '100';
+      }
+      document.querySelector('select[name="output"]').value = 'html';
+    }
+  </script>
 </body>
 </html>
 """
@@ -183,22 +209,48 @@ def index():
 
             hosts_raw = [h.strip() for h in host_input.split(",") if h.strip()]
 
-            # Detectar si es un rango de red (ej: 192.168.100.0)
+            # Detectar si es red con notación CIDR (ej: 192.168.100.0/24)
+            network_cidr = None
             hosts = []
             red_info = ""
             for h in hosts_raw:
-                if h.endswith(".0") and h.count(".") == 3:
+                if "/" in h:
                     try:
-                        red_ips = ips_en_red(h)
-                        hosts.extend(red_ips)
-                        red_info += f"\n<i class='info'>Red detectada: {h} → escaneando {len(red_ips)} IPs (.1-.254)</i>\n"
+                        import ipaddress
+                        net = ipaddress.ip_network(h, strict=False)
+                        network_cidr = net
+                        hosts.extend([str(ip) for ip in net.hosts()])
+                        red_info += f"<i class='info'>Red CIDR detectada: {h} → {len(list(net.hosts()))} hosts</i>\n"
+                        break
                     except ValueError:
-                        hosts.append(h)
-                else:
-                    hosts.append(h)
+                        pass
 
-            # Si es HTML y un solo host, manejar de forma especial (devolver como descarga)
-            if output_fmt == "html" and len(hosts) == 1:
+            # Si no es CIDR, verificar si es red clásica (.0 al final)
+            if not network_cidr:
+                for h in hosts_raw:
+                    if h.endswith(".0") and h.count(".") == 3:
+                        try:
+                            red_ips = ips_en_red(h)
+                            hosts.extend(red_ips)
+                            red_info += f"<i class='info'>Red detectada: {h} → escaneando {len(red_ips)} IPs (.1-.254)</i>\n"
+                        except ValueError:
+                            hosts.append(h)
+                        break
+
+            # Agregar hosts que no son redes
+            for h in hosts_raw:
+                if "/" not in h and not (h.endswith(".0") and h.count(".") == 3):
+                    if h not in hosts and h:
+                        hosts.append(h)
+
+            output_buffer = []
+            if red_info:
+                output_buffer.append(red_info)
+
+            total_hosts = len(hosts)
+
+            # Si es HTML y un solo host, devolver como descarga directa
+            if output_fmt == "html" and total_hosts == 1:
                 h = hosts[0]
                 try:
                     ip, ip_version = resolve_host(h)
@@ -239,11 +291,6 @@ def index():
                         os.unlink(tmp_path)
 
             # Para otros formatos o múltiples hosts
-            output_buffer = []
-            if red_info:
-                output_buffer.append(red_info)
-
-            total_hosts = len(hosts)
             for idx, h in enumerate(hosts, 1):
                 try:
                     ip, ip_version = resolve_host(h)
