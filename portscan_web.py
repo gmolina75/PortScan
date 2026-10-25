@@ -156,8 +156,54 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       if (!document.querySelector('input[name="workers"]').value || parseInt(document.querySelector('input[name="workers"]').value) < 50) {
         document.querySelector('input[name="workers"]').value = '100';
       }
-      document.querySelector('select[name="output"]').value = 'html';
     }
+
+    // Streaming en tiempo real con Server-Sent Events
+    async function scanStream() {
+      const form = document.getElementById('scanForm');
+      const formData = new FormData(form);
+      const params = new URLSearchParams();
+      for (const [key, value] of formData.entries()) {
+        params.append(key, value);
+      }
+      
+      const resultDiv = document.getElementById('result');
+      resultDiv.innerHTML = '<span class="info">Iniciando escaneo en tiempo real...</span>';
+      
+      const eventSource = new EventSource('/scan-stream?' + params.toString());
+      
+      eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+          resultDiv.innerHTML += data.html + '\n';
+          resultDiv.scrollTop = resultDiv.scrollHeight;
+        } else if (data.type === 'complete') {
+          resultDiv.innerHTML = data.html;
+          eventSource.close();
+        } else if (data.type === 'error') {
+          resultDiv.innerHTML += '<span class="port-closed">Error: ' + data.message + '</span>';
+          eventSource.close();
+        }
+      };
+      
+      eventSource.onerror = function(err) {
+        resultDiv.innerHTML += '<span class="port-closed">Conexión interrumpida</span>';
+        eventSource.close();
+      };
+    }
+
+    // Interceptar el form submit para usar streaming
+    document.getElementById('scanForm').addEventListener('submit', function(e) {
+      const outputFmt = document.querySelector('select[name="output"]').value;
+      // Para HTML/CSV/JSON como descarga, usar el método POST normal
+      if (outputFmt !== 'text') {
+        // Dejar que el formulario funcione normal (POST)
+        return true;
+      }
+      // Para texto, usar streaming en tiempo real
+      e.preventDefault();
+      scanStream();
+    });
   </script>
 </body>
 </html>
@@ -171,6 +217,182 @@ def detectar():
         "ip_local": ip_local(),
         "ip_publica": ip_publica()
     }, ensure_ascii=False)
+
+
+@app.route("/scan-stream")
+def scan_stream():
+    """Endpoint SSE (Server-Sent Events) para escaneo en tiempo real."""
+    from flask import Response as FlaskResponse
+    import json
+    import urllib.parse
+
+    # Obtener parámetros
+    query = request.args
+    host_input = urllib.parse.unquote(query.get("host", ""))
+    ports_input = query.get("ports", "").strip()
+    preset_input = query.get("preset", "").strip()
+    proto = query.get("proto", "tcp").lower()
+
+    try:
+        timeout = float(query.get("timeout", "1.0"))
+    except ValueError:
+        timeout = 1.0
+
+    try:
+        workers = int(query.get("workers", "100"))
+    except ValueError:
+        workers = 100
+
+    output_fmt = query.get("output", "text")
+
+    def generate():
+        try:
+            # Determinar puertos
+            if preset_input and preset_input in PRESETS:
+                puertos = PRESETS[preset_input]
+            elif ports_input:
+                puertos = parse_ports(ports_input)
+            else:
+                puertos = parse_ports("1-1024")
+
+            hosts_raw = [h.strip() for h in host_input.split(",") if h.strip()]
+
+            # Detectar red CIDR
+            network_cidr = None
+            hosts = []
+            red_info = ""
+            import ipaddress
+
+            for h in hosts_raw:
+                if "/" in h:
+                    try:
+                        net = ipaddress.ip_network(h, strict=False)
+                        network_cidr = net
+                        hosts.extend([str(ip) for ip in net.hosts()])
+                        red_info += f"<i class='info'>Red CIDR detectada: {h} → {len(list(net.hosts()))} hosts</i>"
+                        break
+                    except ValueError:
+                        pass
+
+            # Detectar red clásica (.0 al final)
+            if not network_cidr:
+                for h in hosts_raw:
+                    if h.endswith(".0") and h.count(".") == 3:
+                        try:
+                            red_ips = ips_en_red(h)
+                            hosts.extend(red_ips)
+                            red_info += f"<i class='info'>Red detectada: {h} → escaneando {len(red_ips)} IPs (.1-.254)</i>"
+                        except ValueError:
+                            hosts.append(h)
+                        break
+
+            # Agregar hosts individuales
+            for h in hosts_raw:
+                if "/" not in h and not (h.endswith(".0") and h.count(".") == 3):
+                    if h not in hosts and h:
+                        hosts.append(h)
+
+            if not hosts:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No se especificaron hosts válidos'})}\n\n"
+                return
+
+            total_hosts = len(hosts)
+            all_reportes = []
+            abiertos_totales = []
+
+            # Enviar info de la red
+            if red_info:
+                yield f"data: {json.dumps({'type': 'progress', 'html': red_info})}\n\n"
+
+            # Escanear cada host
+            for idx, h in enumerate(hosts, 1):
+                try:
+                    ip, ip_version = resolve_host(h)
+                except ValueError:
+                    msg = f"<span class='port-closed'>[!] No se pudo resolver: {h}</span>"
+                    yield "data: " + json.dumps({'type': 'progress', 'html': msg}) + "\n\n"
+                    continue
+
+                if total_hosts > 1:
+                    msg = f"<span class='info'>[{idx}/{total_hosts}] Escaneando: {h} ({ip})</span>"
+                    yield "data: " + json.dumps({'type': 'progress', 'html': msg}) + "\n\n"
+
+                resultados, duracion = scan(
+                    ip, puertos, timeout=timeout, workers=workers,
+                    protocolo=proto, ip_version=ip_version, quiet=True
+                )
+
+                abiertos = [r for r in resultados if r.abierto]
+                for r in abiertos:
+                    abiertos_totales.append(r)
+                    html_msg = f"<span class='port-open'>[+] {h}:{r.puerto} ({r.servicio})</span>"
+                    yield "data: " + json.dumps({'type': 'progress', 'html': html_msg}) + "\n\n"
+
+                resumen = f"=== {h} ({ip}) [IPv{ip_version}] === "
+                resumen += f"Abiertos: {len(abiertos)} | Duración: {duracion:.2f}s"
+                yield "data: " + json.dumps({'type': 'progress', 'html': f"<span class='info'>{resumen}</span>"}) + "\n\n"
+
+                reporte = Reporte(
+                    host=h, ip=ip, protocolo=proto,
+                    inicio=datetime.now().isoformat(timespec="seconds"),
+                    duracion=duracion, puertos_escaneados=len(puertos),
+                    puertos_abiertos=len(abiertos),
+                    resultados=resultados,
+                )
+                all_reportes.append(reporte)
+
+            # Enviar resumen final
+            resumen_final = f"<div class='ips'>Escaneo completado: {total_hosts} hosts, {sum(len(r.resultados) for r in all_reportes)} puertos escaneados, {len(abiertos_totales)} puertos abiertos</div>"
+            
+            if output_fmt == "html" and total_hosts == 1 and all_reportes:
+                # Exportar HTML completo
+                from portscan import _exportar_html
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode='w', encoding='utf-8') as tmp:
+                    tmp_path = tmp.name
+                try:
+                    _exportar_html(all_reportes[0], Path(tmp_path))
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
+                        html_content = f.read()
+                    yield f"data: {json.dumps({'type': 'complete', 'html': html_content})}\n\n"
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            elif output_fmt == "html" and total_hosts > 1:
+                # Combinar HTML de todos los reportes
+                from portscan import _exportar_html
+                import tempfile
+                import os
+                combined = ""
+                for rep in all_reportes:
+                    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode='w', encoding='utf-8') as tmp:
+                        tmp_path = tmp.name
+                    try:
+                        _exportar_html(rep, Path(tmp_path))
+                        with open(tmp_path, 'r', encoding='utf-8') as f:
+                            combined += f.read() + "\n<hr/>\n"
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                yield f"data: {json.dumps({'type': 'complete', 'html': combined})}\n\n"
+            else:
+                # Formato texto con todos los resultados
+                output_html = resumen_final
+                for rep in all_reportes:
+                    abiertos = [r for r in rep.resultados if r.abierto]
+                    output_html += f"\n<div class='port-open'>Puerto(es) abiertos en {rep.host} ({rep.ip}):</div>\n<ul>"
+                    for r in abiertos:
+                        output_html += f"<li class='port-open'>Puerto {r.puerto} ({r.servicio})</li>"
+                    output_html += "</ul>"
+                    if not abiertos:
+                        output_html += f"<div>No se encontraron puertos abiertos en {rep.host}</div>"
+                yield f"data: {json.dumps({'type': 'complete', 'html': output_html})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return FlaskResponse(generate(), mimetype='text/event-stream')
 
 
 @app.route("/", methods=["GET", "POST"])
